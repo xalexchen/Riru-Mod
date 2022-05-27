@@ -1,0 +1,155 @@
+import org.apache.tools.ant.filters.FixCrLfFilter
+import org.apache.tools.ant.filters.ReplaceTokens
+
+import java.security.MessageDigest
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+apply from: 'module.gradle'
+
+android {
+    compileSdk 32
+
+    defaultConfig {
+        applicationId "dev.alex.riru.mod"
+        minSdk 25
+        targetSdk 32
+        versionCode 1
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                arguments "-DMODULE_NAME:STRING=$moduleId",
+                        "-DRIRU_MODULE_ID=$moduleId",
+                        "-DRIRU_MODULE_API_VERSION=$moduleRiruApiVersion",
+                        "-DRIRU_MODULE_VERSION=$moduleVersionCode",
+                        "-DRIRU_MODULE_VERSION_NAME:STRING=\"$moduleVersion\""
+                cppFlags ''
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.18.1'
+        }
+    }
+    buildFeatures {
+        prefab true
+    }
+}
+
+dependencies {
+    implementation 'dev.rikka.ndk:riru:25.0.0'
+}
+
+def moduleProps = [
+        id         : "riru_$moduleId",
+        name       : "Riru - ${moduleName}",
+        version    : moduleVersion,
+        versionCode: moduleVersionCode,
+        author     : "xalexchen",
+        description: moduleDescription
+]
+
+def outDir = file("$rootDir/out")
+
+afterEvaluate {
+    android.applicationVariants.forEach { variant ->
+        def variantCapped = variant.name.capitalize()
+        def variantLowered = variant.name.toLowerCase()
+
+        def zipName = "${moduleId}-${moduleVersion}-${variantLowered}.zip"
+        def magiskDir = file("$outDir/magisk_module_$variantLowered")
+
+        task("prepareRiruModFiles${variantCapped}", type: Sync) {
+            dependsOn("assemble$variantCapped")
+
+            def templatePath = "$rootDir/template/magisk_module"
+
+            into magiskDir
+            from(templatePath) {
+                exclude 'riru.sh', 'module.prop'
+            }
+
+            from(templatePath) {
+                include 'riru.sh'
+                filter(ReplaceTokens.class, tokens: [
+                        "RIRU_MODULE_ID"         : moduleId,
+                        "RIRU_MODULE_API_VERSION": moduleRiruApiVersion.toString(),
+                        "RIRU_MODULE_MIN_API_VERSION": moduleMinRiruApiVersion.toString(),
+                        "RIRU_MODULE_MIN_RIRU_VERSION_NAME" : moduleMinRiruVersionName
+                ])
+                filter(FixCrLfFilter.class,
+                        eol: FixCrLfFilter.CrLf.newInstance("lf"))
+            }
+
+            from(templatePath) {
+                include 'module.prop'
+                expand moduleProps
+                filter(FixCrLfFilter.class,
+                        eol: FixCrLfFilter.CrLf.newInstance("lf"))
+            }
+
+            from("$buildDir/intermediates/stripped_native_libs/$variantLowered/out/lib") {
+                into 'lib'
+            }
+
+            doLast {
+                fileTree("$magiskDir").visit { f ->
+                    if (f.directory) return
+                    if (f.file.name == '.gitattributes') return
+
+                    def md = MessageDigest.getInstance("SHA-256")
+                    f.file.eachByte 4096, { bytes, size ->
+                        md.update(bytes, 0, size)
+                    }
+                    file(f.file.path + ".sha256sum").text = md.digest().encodeHex()
+                }
+            }
+        }
+
+        task("zip${variantCapped}", type: Zip) {
+            dependsOn("prepareRiruModFiles${variantCapped}")
+            from magiskDir
+            archiveName zipName
+            destinationDir outDir
+        }
+
+        task("push${variantCapped}", type: Exec) {
+            dependsOn("zip${variantCapped}")
+            workingDir outDir
+            commandLine android.adbExecutable, "push", zipName, "/sdcard"
+        }
+
+        task("flash${variantCapped}", type: Exec) {
+            dependsOn("push${variantCapped}")
+            commandLine android.adbExecutable, "shell", "su", "-c", "magisk --install-module /sdcard/${zipName}"
+        }
+
+        task("flashAndReboot${variantCapped}", type: Exec) {
+            dependsOn("flash${variantCapped}")
+            commandLine android.adbExecutable, "shell", "reboot"
+        }
+
+        variant.assembleProvider.get().finalizedBy("zip${variantCapped}")
+    }
+}

@@ -1,0 +1,17 @@
+ext {
+
+    moduleMinRiruApiVersion = 25
+    moduleMinRiruVersionName = "v25.0.0"
+    moduleRiruApiVersion = 25
+
+    moduleId = "mod"
+    moduleName = "Hello Riru Mod"
+    moduleAuthor = "xalexchen"
+    moduleDescription = "Demonstrate how to write riru modules"
+
+    moduleVersionMajor = 1
+    moduleVersionMinor = 0
+    moduleVersionPatch = 0
+    moduleVersion = "v${moduleVersionMajor}.${moduleVersionMinor}.${moduleVersionPatch}"
+    moduleVersionCode = 1
+}
